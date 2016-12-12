@@ -3,6 +3,8 @@ import EntitySchema from 'normalizr/lib/EntitySchema';
 import UnionSchema from 'normalizr/lib/UnionSchema';
 import merge from 'lodash/merge';
 import isObject from 'lodash/isObject';
+import isFunction from 'lodash/isFunction';
+import isString from 'lodash/isString';
 import { isImmutable, getIn, setIn, moveUnionToSchema } from './ImmutableUtils';
 
 /**
@@ -26,6 +28,26 @@ function resolveEntityOrId(entityOrId, entities, schema) {
   }
 
   return { entity, id };
+}
+
+/**
+ * Take an object and extract a field from it. If the field is a function,
+ * then call that function on the object, with all the entities and the
+ * current value of that field (if any)
+ *
+ * @param   {object|Immutable.Map} obj
+ * @param   {object|Immutable.Map} entities
+ * @param   {string|Function} field
+ * @returns {object}
+ */
+function resolveField(obj, entities, value, field) {
+  if (isString(field)) {
+    return obj[field];
+  } else if (isFunction(field)) {
+    return field(obj, entities, value);
+  }
+
+  return obj;
 }
 
 /**
@@ -92,8 +114,17 @@ function denormalizeObject(obj, entities, schema, bag) {
     .filter(attribute => attribute.substring(0, 1) !== '_')
     .filter(attribute => typeof getIn(obj, [attribute]) !== 'undefined')
     .forEach((attribute) => {
-      const item = getIn(obj, [attribute]);
-      const itemSchema = getIn(schema, [attribute]);
+      let item = getIn(obj, [attribute]);
+      let itemSchema = getIn(schema, [attribute]);
+
+      if (Object.keys(itemSchema).length === 2 && 'resolve' in itemSchema && 'schema' in itemSchema) {
+        const newItem = resolveField(obj, entities, item, itemSchema.resolve);
+        if (newItem !== null && typeof newItem !== 'undefined') {
+          item = newItem;
+        }
+
+        itemSchema = itemSchema.schema;
+      }
 
       denormalized = setIn(denormalized, [attribute], denormalize(item, entities, itemSchema, bag));
     });
@@ -158,6 +189,7 @@ export function denormalize(obj, entities, schema, bag = {}) {
   } else if (schema instanceof UnionSchema) {
     return denormalizeUnion(obj, entities, schema, bag);
   }
+
   // Ensure we don't mutate it non-immutable objects
   const entity = isImmutable(obj) ? obj : merge({}, obj);
   return denormalizeObject(entity, entities, schema, bag);
